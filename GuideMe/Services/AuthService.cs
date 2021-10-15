@@ -1,5 +1,6 @@
 ﻿using GuideMe.Helpers;
 using GuideMe.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -16,12 +17,15 @@ namespace GuideMe.Services
     public class AuthService : IAuthService
     {
         private readonly UserManager<AppUser> _userManager;
+        private readonly RoleManager<IdentityRole> _roleManager;
         private readonly JWT _jwt;
-        public AuthService(UserManager<AppUser> userManager, IOptions<JWT> jwt)
+        public AuthService(UserManager<AppUser> userManager, RoleManager<IdentityRole> roleManager, IOptions<JWT> jwt)
         {
             _userManager = userManager;
+            _roleManager = roleManager;
             _jwt = jwt.Value;
         }
+
         public async Task<AuthModel> RegisterAsync(RegisterModel model)
         {
             if(await _userManager.FindByEmailAsync(model.Email) is not null ) {
@@ -57,6 +61,7 @@ namespace GuideMe.Services
 
         }
 
+
         private async Task<JwtSecurityToken> CreateJwtToken(AppUser user) {
             var userClaims = await _userManager.GetClaimsAsync(user);
             var roles = await _userManager.GetRolesAsync(user);
@@ -84,6 +89,46 @@ namespace GuideMe.Services
                 signingCredentials: signingCredentials);
 
             return jwtSecurityToken;
+        }
+
+        public async Task<AuthModel> GetTokenAsync(TokenRequestModel model)
+        {
+            var authModel = new AuthModel();
+            var user = await _userManager.FindByEmailAsync(model.Email);
+            if (user is null || !await _userManager.CheckPasswordAsync(user, model.Password))
+            {
+                authModel.Message = "Email or Password is incorrect";
+            }
+            else
+            {
+                var jwtSecurityToken = await CreateJwtToken(user);
+                var rolesList = await _userManager.GetRolesAsync(user);
+
+                authModel.IsAuthenticated = true;
+                authModel.Token = new JwtSecurityTokenHandler().WriteToken(jwtSecurityToken);
+                authModel.Email = user.Email;
+                authModel.UserName = user.UserName;
+                authModel.ExpiresOn = jwtSecurityToken.ValidTo;
+                authModel.Roles = rolesList.ToList();
+            }
+            
+            return authModel;
+        }
+
+        [Authorize(Roles ="Admin")]
+        public async Task<string> AddRoleAsync(AddRoleModel model)
+        {
+            var user = await _userManager.FindByIdAsync(model.UserId);
+            if (user is null || !await _roleManager.RoleExistsAsync(model.Role))
+                return "Invalid user ID or role";
+            if (await _userManager.IsInRoleAsync(user, model.Role))
+                return "User already assigned to this role";
+
+            var result = await _userManager.AddToRoleAsync(user, model.Role);
+            if (!result.Succeeded)
+                return "Something went wrong";
+
+            return "Success";
         }
     }
 }
